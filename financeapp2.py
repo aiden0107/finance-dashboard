@@ -106,7 +106,7 @@ def extendedAnalysis(col, string, prices, p, o, q):
         "Sharpe ratio": mu/std,
         "Skewness": (col*100).skew(),
         "Kurtosis": (col*100).kurt()+3,
-        "Jarque-Bera": jarque_bera(col)[0}, index=[string])
+        "Jarque-Bera": jarque_bera(col)[0]}, index=[string])
     
     st.write("### Asset summary")
     st.dataframe(statistics_df.style.format("{:.4f}"))  
@@ -300,5 +300,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
