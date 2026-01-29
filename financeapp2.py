@@ -55,7 +55,7 @@ def printingstatistics(df):
     jb = n/6 * skew**2 + n/24 *(kurt-3)**2
 
     stats = pd.DataFrame({
-        "Mean": mean, "Std": std, "Sharpe": sharpe, 
+        "Mean": mean*100, "Std": std*100, "Sharpe": sharpe, 
         "Skew": skew, "Kurt": kurt, "JB": jb
     })
     st.dataframe(stats)
@@ -268,3 +268,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
