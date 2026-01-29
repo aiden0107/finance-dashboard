@@ -55,7 +55,7 @@ def printingstatistics(df):
     jb = n/6 * skew**2 + n/24 *(kurt-3)**2
 
     stats = pd.DataFrame({
-        "Mean": mean*100, "Std": std*100, "Sharpe": sharpe, 
+        "Mean (%)": mean*100, "Std (%)": std*100, "Sharpe": sharpe, 
         "Skew": skew, "Kurt": kurt, "JB": jb
     })
     st.dataframe(stats)
@@ -98,86 +98,113 @@ def extended_GARCH(p, o, q, returns, string):
     return garch_var
 
 def extendedAnalysis(col, string, prices, p, o, q):
-    fig = plt.figure(figsize=(15, 15), constrained_layout=True)
-    ax1 = plt.subplot2grid((3, 2), (0, 0))
-    ax2 = plt.subplot2grid((3, 2), (0, 1))
-    ax3 = plt.subplot2grid((3, 2), (1, 0))
-    ax4 = plt.subplot2grid((3, 2), (1, 1))
-    ax5 = plt.subplot2grid((3, 2), (2, 0), colspan=2)
-
-
     mu, std = norm.fit(col)
-    ax1.hist(col, bins=int(np.floor(np.sqrt(len(col)))), density=True, color='skyblue', edgecolor='black', alpha=0.7)
-    xmin, xmax = ax1.get_xlim()
-    x = np.linspace(xmin, xmax, 100)
-    p_pdf = norm.pdf(x, mu, std)
-    ax1.plot(x, p_pdf, 'k--', linewidth=2, label=fr'$\mu$={mu:.4f}, $\sigma$={std:.4f}')
-    ax1.set_title(f"Returns Distribution: {string}")
-    ax1.legend()
 
+    statistics_df =pd.DataFrame({
+        "Mean (%)": mu*100,
+        "Std dev (%)": std*100,
+        "Sharpe ratio": mu/std,
+        "Skewness": (col*100).skew(),
+        "Kurtosis": (col*100).kurt()+3,
+        "Jarque-Bera": jarque_bera(col)}, index=[string])
+    
+    st.write("### Asset summary")
+    st.dataframe(statistics_df.style.format("{:.4f}"))  
 
-    ax2.plot(prices.index, prices, color='orange')
-    ax2.set_title(f"Price: {string}")
+    c1,c2 = st.columns(2)
+    with c1:
+        st.write("**Returns distribution**")
+        fig,ax = plt.subplots(figsize=(6,4))
+        ax.hist(col, bins=int(np.floor(np.sqrt(len(col)))), density=True, 
+                color='skyblue', edgecolor='black', alpha=0.7)
+        xmin, xmax = ax.get_xlim()
+        x = np.linspace(xmin, xmax, 100)
+        p_pdf = norm.pdf(x, mu, std)
+        ax.plot(x, p_pdf, 'k--', linewidth=2, label=fr'$\mu$={mu:.4f}, $\sigma$={std:.4f}')
+        ax.legend()
+        ax.set_xlabel("Return")
+        st.pyplot(fig)
+    
+    with c2:
+        st.write("**Price History**")
+        fig,ax = plt.subplots(figsize=(6,4))
+        ax.plot(prices.index,prices,color='orange')
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Price")
+        st.pyplot(fig)
 
-    plot_acf(col, lags=50, ax=ax3, title="ACF Returns")
-    plot_acf(col**2, lags=50, ax=ax4, title="ACF Squared Returns")
+    st.divider()
+    c3,c4 = st.columns(2)
+    with c3:
+        st.write("**ACF: Returns**")
+        fig,ax = plt.subplots(figsize= (6,4))
+        plot_acf(col,lags =50, ax=ax, title=None)
+        st.pyplot(fig)
+    
+    with c4:
+        st.write("**ACF: Squared Returns")
+        fig,ax = plt.subplots(figsize=(6,4))
+        plot_acf(col**2, lags = 50, ax=ax, title=None)
+        st.pyplot(fig)
 
+    st.divider()
+    st.write("### Realized variance 5 minutes (Only last 60 days :/ )")
 
     try:
-        intra_data = yf.download(string, period="60d", interval="5m", auto_adjust=True, progress=False)
-        
-
+        intra_data = yf.download(
+            string, period="60d", interval ="5m", auto_adjust=True
+        )
         if isinstance(intra_data, pd.DataFrame):
-            if 'Close' in intra_data.columns:
-                intra = intra_data['Close']
-            else:
-                intra = intra_data.iloc[:, 0] 
-        else:
-            intra = intra_data
-            
-
-        intra = intra.squeeze() 
-        intra = intra.ffill()
-
-
-        returns_intra = intra.pct_change().dropna()
-        squared_returns = returns_intra ** 2
-        
-  
-        rv = squared_returns.groupby(squared_returns.index.date).sum()
+            if 'Close' in intra_data.columns: intra = intra_data['Close']
+            else: intra = intra_data.iloc[:,0]
+        else: intra = intra_data
+        intra = intra.squeeze().ffill()
+        rv = (intra.pct_change().dropna()**2).groupby(intra.index.date).sum()
         rv.index = pd.to_datetime(rv.index)
 
-
-        ax5.plot(rv.index, rv, 'purple', marker='o', linewidth = 0.5, linestyle='-')
-        ax5.set_title("Realized Variance (5m) - Last 60 Days")
-        ax5.grid(True, alpha=0.3)
-        
+        fig,ax = plt.subplots(figsize=(10,4))
+        ax.plot(rv.index, rv, 'purple', linewidth=0.5, markersize=4, linestyle='-')
+        ax.grid(True, alpha=0.3)
+        st.pyplot(fig)
     except Exception as e:
-        ax5.text(0.5, 0.5, f"Intraday Unavailable: {e}", ha='center', va='center')
-        print(f"Debug Error: {e}") 
-    st.pyplot(fig)
+        st.warning(f"Intraday data unavailable: {e}")
+
+    st.divider()
+
+    tab_roll, tab_garch = st.tabs(["Rolling Volatility", "GARCH Model"])
+
+    with tab_roll:
+        fig, ax = plt.subplots(figsize=(10, 4))
+        for i, color in zip((63, 126, 252), ['green', 'blue', 'red']):
+            hv = col.rolling(window=i).var()
+            ax.plot(hv.index, hv, color=color, label=f'{i}d Var')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        st.pyplot(fig)
+
+    with tab_garch:
+        try:
+            # We call your helper function to print the params table first
+            garch_var = extended_GARCH(p, o, q, col*100, string)
+            
+            # Then we plot
+            fig, ax = plt.subplots(figsize=(10, 4))
+            sq_ret = (col * 100) ** 2
+            ax.plot(sq_ret.index, sq_ret, color='grey', alpha=0.3, lw=0.5, label='Squared Returns')
+            ax.plot(garch_var.index, garch_var, color='red', lw=1.5, label='GARCH Variance')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            st.pyplot(fig)
+        except Exception as e:
+            st.error(f"GARCH Model Failed: {e}")
+
+    
 
 
-    fig2, (ax_vol, ax_garch) = plt.subplots(2, 1, figsize=(15, 10), constrained_layout=True)
+    
 
-    for i, color in zip((63, 126, 252), ['green', 'blue', 'red']):
-        hv = col.rolling(window=i).var() 
-        ax_vol.plot(hv.index, hv, color=color, label=f'{i}d Var')
-    ax_vol.legend()
-    ax_vol.set_title("Historical Rolling Variance")
 
-    try:
-        garch_var = extended_GARCH(p, o, q, col*100, string)
-        
-        sq_ret = (col * 100) ** 2
-        ax_garch.plot(sq_ret.index, sq_ret, color='grey', alpha=0.3, lw=0.5, label='Squared Returns')
-        ax_garch.plot(garch_var.index, garch_var, color='red', lw=1.5, label='GARCH Variance')
-        ax_garch.legend()
-        ax_garch.set_title(f"GARCH({p},{o},{q}) Analysis")
-    except Exception as e:
-        ax_garch.text(0.5, 0.5, f"GARCH Failed: {e}", ha='center')
 
-    st.pyplot(fig2)
 
 def main():
     st.sidebar.title("Configuration")
@@ -242,10 +269,15 @@ def main():
             col1, col2 = st.columns([1, 1]) 
             
             with col1:
+                st.subheader("Correlation Matrix (daily returns)")
                 plotcorrelations(dailygain)
+            with col2: 
+                st.subheader("Correlation Matrix (monthly returns)")
+                plotcorrelations(monthlygain)
 
         with tab3:
             st.write("### Fama French 3-Factor Model")
+            st.write("This model is based on the monthly returns :/")
             try:
                 ff3 = gatheringff3_m()
                 res = runningfamafrenchregression(monthlygain, ff3)
