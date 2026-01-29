@@ -97,7 +97,9 @@ def extended_GARCH(p, o, q, returns, string):
     
     return garch_var
 
-def extendedAnalysis(col, string, prices, p, o, q):
+def extendedAnalysis(string, start,end, p, o, q):
+    prices= yf.download(string, start=start,end=end, auto_adjust=True)["Close"]
+    col = prices.pct_change().dropna()
     mu, std = norm.fit(col)
 
     statistics_df =pd.DataFrame({
@@ -142,7 +144,7 @@ def extendedAnalysis(col, string, prices, p, o, q):
         st.pyplot(fig)
     
     with c4:
-        st.write("**ACF: Squared Returns")
+        st.write("**ACF: Squared Returns**")
         fig,ax = plt.subplots(figsize=(6,4))
         plot_acf(col**2, lags = 50, ax=ax, title=None)
         st.pyplot(fig)
@@ -159,7 +161,15 @@ def extendedAnalysis(col, string, prices, p, o, q):
             else: intra = intra_data.iloc[:,0]
         else: intra = intra_data
         intra = intra.squeeze().ffill()
-        rv = (intra.pct_change().dropna()**2).groupby(intra.index.date).sum()
+     
+        intra_ret = intra.pct_change().dropna()
+
+    
+        intra_sq = intra_ret ** 2
+
+       
+        rv = intra_sq.groupby(intra_sq.index.date).sum()
+        
         rv.index = pd.to_datetime(rv.index)
 
         fig,ax = plt.subplots(figsize=(10,4))
@@ -296,10 +306,8 @@ def main():
             o = 1 if type_g == "TGARCH" else 0
             
             if st.button("Run Deep Dive Analysis"):
-                extendedAnalysis(dailygain[target], target, prices[target], p, o, q)
+                extendedAnalysis(target,start_date,end_date, p, o, q)
 
 if __name__ == "__main__":
     main()
-
-
 
