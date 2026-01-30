@@ -9,12 +9,22 @@ import statsmodels.api as sm
 from arch import arch_model
 from statsmodels.graphics.tsaplots import plot_acf
 from scipy.stats import jarque_bera, norm
-from datetime import datetime
+from datetime import datetime,timedelta
+
+
+#garch mspe's
+#factor models, plot coefficients over time
 
 
 st.set_page_config(page_title="Finance Dashboard", layout="wide")
 
-
+def timedeltafunction(time, days,operator_string):
+    duration = timedelta(days=days)
+    if operator_string == "+":
+        return time + duration
+    else:
+        return time - duration
+    
 @st.cache_data
 def gatheringdata(tickers, start, end):
     prices = yf.download(tickers, start=start, end=end, auto_adjust=True)["Close"]
@@ -85,7 +95,11 @@ def extended_GARCH(p, o, q, returns, string):
     
     data_dict = {
         "mu": fit.params['mu'],
-        "uncond_var": long_run_var,
+        "unconditional variance": long_run_var,
+        "mean (std resid)": std_resid.mean(),
+        "std (std resid)": std_resid.std(),
+        "skew (std resid)": std_resid.skew(),
+        "kurt (std resid)": std_resid.kurt()+3,
         "JB (resid)": jarque_bera(std_resid)[0]
     }
     
@@ -96,6 +110,50 @@ def extended_GARCH(p, o, q, returns, string):
     st.dataframe(pd.DataFrame(data_dict, index=[string]))
     
     return garch_var
+
+def extended_GARCHforecasting(dailygain,start,end,p,o,q,delta,string):
+    end1= timedeltafunction(end,delta,"-")
+   
+
+    test_dates = pd.date_range(start=end1, end=end, freq='B')
+    valid_dates = dailygain.index.intersection(test_dates)
+    forecasts = []
+    forecasts_indices = []
+
+    for current_date, next_date in zip(valid_dates, valid_dates[1:]):
+        subset = dailygain[start:current_date]
+        garch_model = arch_model(subset, vol='Garch', p=p, o=o, q=q, dist='normal', mean='Constant')
+
+        res = garch_model.fit(disp='off')
+        prediction = res.forecast(horizon=1)
+        forecasts.append(prediction.variance.iloc[-1,0])
+        forecasts_indices.append(next_date)
+
+    forecasts_df = pd.DataFrame({"Predictions": forecasts}, index= forecasts_indices)
+    targets1 = dailygain.loc[forecasts_df.index]**2
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    
+ 
+    ax.plot(targets1.index, targets1, color='grey', alpha=0.3, label='Actual Squared Returns')
+    
+    
+    ax.plot(forecasts_df.index, forecasts_df['Predictions'], color='red', linewidth=1.5, label='Variance Forecast')
+
+    ax.set_title(f"Rolling Forecast vs Realized Variance: {string}")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    ax.set_ylabel("Variance")
+
+    MSPE = ((forecasts_df["Predictions"] - targets1[string])**2).mean()
+    evaluation_df = pd.DataFrame({
+        "MSPE": MSPE
+    }, index = [string])
+    return evaluation_df, fig
+    
+
+
+
 
 def extendedAnalysis(string, start,end, p, o, q):
     prices= yf.download(string, start=start,end=end, auto_adjust=True)["Close"]
@@ -194,10 +252,8 @@ def extendedAnalysis(string, start,end, p, o, q):
 
     with tab_garch:
         try:
-            # We call your helper function to print the params table first
             garch_var = extended_GARCH(p, o, q, col*100, string)
-            
-            # Then we plot
+        
             fig, ax = plt.subplots(figsize=(10, 4))
             sq_ret = (col * 100) ** 2
             ax.plot(sq_ret.index, sq_ret, color='grey', alpha=0.3, lw=0.5, label='Squared Returns')
@@ -207,35 +263,54 @@ def extendedAnalysis(string, start,end, p, o, q):
             st.pyplot(fig)
         except Exception as e:
             st.error(f"GARCH Model Failed: {e}")
+        st.divider()
+        try:
+            st.subheader("Rolling forecasts (last 30 days)")
+            eval_df, figure = extended_GARCHforecasting(col*100,start,end,p,o,q,30,string)
+            st.pyplot(figure)
 
-    
-
-
-    
-
-
-
-
+            with st.expander("Evaluation matrix"):
+                st.dataframe(eval_df)
+        except Exception as e:
+            st.error(f"GARCH forecasts Failed: {e}")
+        
+# Force sidebar to be 400 pixels wide (default is roughly 300)
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] {
+        min-width: 400px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 def main():
     st.sidebar.title("Configuration")
 
 
     if 'tickers' not in st.session_state:
-        st.session_state['tickers'] = ["ABN.AS", "IGLN.L", "ISLN.L", "VUSA.AS", "VWCE.DE"]
+        st.session_state['tickers'] = ["ABN.AS", "IGLN.L", "ISLN.L", "VUSA.AS", "VWCE.DE","EUNK.DE"]
 
 
     st.sidebar.subheader("Manage Tickers")
 
-    new_ticker = st.sidebar.text_input("Add Ticker", placeholder="e.g. MSFT").upper().strip()
-    if st.sidebar.button("Add Ticker"):
-        if new_ticker and new_ticker not in st.session_state['tickers']:
-            st.session_state['tickers'].append(new_ticker)
-            st.sidebar.success(f"Success! Added {new_ticker}")
-        elif new_ticker in st.session_state['tickers']:
-            st.sidebar.warning("Ticker already exists!")
-        else:
-            st.sidebar.warning("Please enter a ticker name.")
-
+    with st.sidebar.form(key='add_ticker_form', clear_on_submit=True):
+        new_ticker_input = st.text_input("Add Ticker", placeholder="e.g. MSFT")
+        
+        submit_button = st.form_submit_button(label='Add Ticker')
+        
+        if submit_button:
+            new_ticker = new_ticker_input.upper().strip()
+            
+            if new_ticker and new_ticker not in st.session_state['tickers']:
+                st.session_state['tickers'].append(new_ticker)
+                st.success(f"Added {new_ticker}!") # Shows inside the form
+            elif new_ticker in st.session_state['tickers']:
+                st.warning("Ticker already exists!")
+            else:
+                st.warning("Please enter a ticker name.")
+    
     ticker_to_delete = st.sidebar.selectbox("Select to Delete", st.session_state['tickers'])
     if st.sidebar.button("Delete Ticker"):
         if len(st.session_state['tickers']) > 1:
@@ -248,7 +323,8 @@ def main():
 
     st.sidebar.markdown("---")
     st.sidebar.write("**Current Portfolio:**")
-    st.sidebar.code(", ".join(st.session_state['tickers']))
+    
+    st.sidebar.multiselect("Current Portfolio:", st.session_state['tickers'], default=st.session_state['tickers'], disabled=True)
 
 
     start_date = st.sidebar.date_input("Start", value=pd.to_datetime("2021-01-01"))
