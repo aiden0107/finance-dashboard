@@ -273,18 +273,7 @@ def extendedAnalysis(string, start,end, p, o, q):
                 st.dataframe(eval_df)
         except Exception as e:
             st.error(f"GARCH forecasts Failed: {e}")
-        
-# Force sidebar to be 400 pixels wide (default is roughly 300)
-st.markdown(
-    """
-    <style>
-    [data-testid="stSidebar"] {
-        min-width: 400px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+            
 def main():
     st.sidebar.title("Configuration")
 
