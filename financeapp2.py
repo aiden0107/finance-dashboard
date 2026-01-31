@@ -32,7 +32,7 @@ def gatheringdata(tickers, start, end):
     
     monthly_prices = prices.resample("ME").last()
     monthly_prices.index = monthly_prices.index.to_period("M")
-    monthly_simple_returns = monthly_prices.pct_change(fill_method=None).dropna()
+    monthly_simple_returns = monthly_prices.pct_change(fill_method=None)
     
     return prices, prices.pct_change(fill_method=None).dropna(), monthly_prices, monthly_simple_returns
 
@@ -375,4 +375,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
