@@ -10,6 +10,7 @@ from arch import arch_model
 from statsmodels.graphics.tsaplots import plot_acf
 from scipy.stats import jarque_bera, norm
 from datetime import datetime,timedelta
+from scipy.optimize import minimize
 
 
 #garch mspe's
@@ -34,7 +35,7 @@ def gatheringdata(tickers, start, end):
     monthly_prices.index = monthly_prices.index.to_period("M")
     monthly_simple_returns = monthly_prices.pct_change(fill_method=None)
     
-    return prices, prices.pct_change(fill_method=None).dropna(), monthly_prices, monthly_simple_returns
+    return prices, prices.pct_change(fill_method=None), monthly_prices, monthly_simple_returns
 
 @st.cache_data
 def gatheringff3_m():
@@ -55,7 +56,11 @@ def runningfamafrenchregression(monthly_returns, fama_df):
     
     return pd.DataFrame(results).T
 
-def printingstatistics(df):
+def printingstatistics(df, prices):
+    start_dates = prices.apply(pd.Series.first_valid_index).dt.date
+    firstvalue = prices.bfill().iloc[0]
+    lastvalue = prices.bfill().iloc[-1]
+    totalyields = (lastvalue - firstvalue)/firstvalue
     mean = df.mean()
     std = df.std()
     skew = df.skew()
@@ -65,15 +70,25 @@ def printingstatistics(df):
     jb = n/6 * skew**2 + n/24 *(kurt-3)**2
 
     stats = pd.DataFrame({
-        "Mean (%)": mean*100, "Std (%)": std*100, "Sharpe": sharpe, 
-        "Skew": skew, "Kurt": kurt, "JB": jb
+        "First recorded value": start_dates,
+        "Last known price": lastvalue,
+        "Total Yield (%)": totalyields*100,
+        "Mean (%)": mean*100, 
+        "Std (%)": std*100, 
+        "Sharpe": sharpe, 
+        "Skew": skew, 
+        "Kurt": kurt, "JB": jb
     })
-    st.dataframe(stats)
+    return stats
 
 def plotcorrelations(df):
     fig, ax = plt.subplots(figsize=(6, 5))
     sns.heatmap(df.corr(), annot=True, cmap="coolwarm", center=0, ax=ax)
-    st.pyplot(fig)
+    return fig
+def plotcovariances(df):
+    fig, ax = plt.subplots(figsize=(6, 5))
+    sns.heatmap(df, annot=True, cmap="coolwarm", center=0, ax=ax)
+    return fig
 
 def extended_GARCH(p, o, q, returns, string):
     garch_model = arch_model(returns, vol='Garch', p=p, o=o, q=q, dist='normal', mean='Constant')
@@ -110,6 +125,7 @@ def extended_GARCH(p, o, q, returns, string):
     st.dataframe(pd.DataFrame(data_dict, index=[string]))
     
     return garch_var
+
 
 def extended_GARCHforecasting(dailygain,start,end,p,o,q,delta,string):
     end1= timedeltafunction(end,delta,"-")
@@ -273,7 +289,125 @@ def extendedAnalysis(string, start,end, p, o, q):
                 st.dataframe(eval_df)
         except Exception as e:
             st.error(f"GARCH forecasts Failed: {e}")
-            
+
+
+def plottingvarexplained(dailyreturns):
+    covmonthly = dailyreturns.cov()
+    dfnp = covmonthly.to_numpy()
+    eigenvalues, eigenvectors = np.linalg.eigh(dfnp)
+    eigenvalues = eigenvalues[::-1]
+    sum = np.sum(eigenvalues)
+    explained_variance = eigenvalues/sum
+    fig, ax = plt.subplots(figsize=(6, 5))
+   
+    x_axis = range(1, len(explained_variance) + 1)
+
+    ax.plot(x_axis, explained_variance, 'o-', linewidth=2, color='blue', label='Individual Variance')
+    return fig
+    
+def pca(df,k):
+    dfcov = df.cov()
+    dfnp = dfcov.to_numpy()
+    
+    eigenvalues, eigenvectors = np.linalg.eigh(dfnp)
+    idx = np.argsort(eigenvalues)[::-1]
+    top_eigenvalues = eigenvalues[idx][:k]
+    top_eigenvectors = eigenvectors[:, idx][:, :k]
+
+    factors = (df - df.mean()) @ top_eigenvectors 
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    sns.heatmap(eigenvectors.T, annot=True, cmap="coolwarm", center=0, 
+                xticklabels=df.columns, yticklabels=[f"F{i+1}" for i in range(k)])
+    ax.set_title("Factor Loadings: Which stocks drive which factor?")
+
+   
+    factorVariance = eigenvectors.T @ factors @ eigenvectors
+    leftover = np.diag(dfcov - factorVariance)
+    leftoverMatrix = np.diag(leftover)
+    reducedCovMatrix = factorVariance + leftoverMatrix
+    return fig
+
+
+def statisticalFactorModel(monthlyreturns):
+    covmonthly = monthlyreturns.cov()
+    return 
+
+
+def weightselection(tickers):
+    st.write("How much money is in your portfolio?")
+    totalWorth = st.number_input("Total worth", 0,1000000, step =1)
+    if totalWorth == 0:
+        return 0,[]
+    st.write("")
+    st.write("")
+    moneyInAsset = []
+    st.write("How much money is in each asset?")
+    lastTik = tickers[-1]
+    for tik in tickers:
+        if tik != lastTik:
+            moneyInAsset.append(st.number_input(tik, 0,1000000, step = 1))
+        else:
+            if moneyInAsset:
+                lastval = totalWorth - np.sum(moneyInAsset)
+                st.write("amount of money in left/in last asset ", tik,  " (approx, who cares):", lastval)
+                moneyInAsset.append(lastval)    
+    
+    return totalWorth,moneyInAsset
+def weightsminimumvariance(covmatrix):
+    ones = np.ones(len(covmatrix))
+    invcovmatrix = np.linalg.inv(covmatrix)
+    weigths = (invcovmatrix @ ones) / (ones @ invcovmatrix @ ones)
+
+    return weigths
+
+
+def minimizingvarianceportfolio(covariancematrix, minreturn, yields):
+    vinv = np.linalg.inv(covariancematrix)    
+    ones = np.ones(len(covariancematrix))
+    ivinvi = ones @vinv @ones
+    muvinvi = yields @ vinv @ ones
+    muvinvmu = yields@vinv@yields
+
+    labda1 =(1/muvinvi) * (minreturn - ((muvinvi - minreturn*ivinvi)*muvinvmu)/(muvinvi**2 - ivinvi*muvinvmu)) 
+    labda2 = (muvinvi -minreturn*ivinvi) / (muvinvi**2 - ivinvi*muvinvmu)
+    return  labda1* vinv @ ones + labda2* vinv@ yields 
+
+
+def portfoliovolatility(weights, covariancematrix):
+    return np.sqrt( weights @ covariancematrix @weights) * np.sqrt(252) *100
+
+def plottingminvarportfolios(covariancematrix,yields):
+    fig, ax = plt.subplots(figsize=(6, 5))
+    
+    maxyield = max(yields)
+    minyield = min(yields)
+    variances =[]
+    returns = []
+    
+    for i in np.linspace(minyield,maxyield, 50):
+        weights = minimizingvarianceportfolio(covariancematrix, i,yields)
+        
+        variances.append(portfoliovolatility(weights, covariancematrix))
+        returns.append(weights @ yields)
+
+    ax.plot(variances, returns, 'o',markersize = 5, alpha = 0.5)
+    ax.set_xlabel("Annualized volatility (%)")
+    ax.set_ylabel("Annualized return (%)")
+    
+    return fig
+
+
+
+def EWMA(df, labda=0.94):
+    ewma_cov = df.ewm(alpha=(1 - labda)).cov()
+    current_cov_matrix = ewma_cov.iloc[-len(df.columns):]
+    current_cov_matrix = current_cov_matrix.droplevel(0)
+    return current_cov_matrix
+
+
+
+
 def main():
     st.sidebar.title("Configuration")
 
@@ -319,36 +453,106 @@ def main():
     start_date = st.sidebar.date_input("Start", value=pd.to_datetime("2021-01-01"))
     end_date = st.sidebar.date_input("End", value=pd.to_datetime("today"))
 
+    
+
 
     if st.sidebar.button("Fetch Data"):
         current_tickers = st.session_state['tickers']
         prices, daily, monthly, monthly_g = gatheringdata(current_tickers, start_date, end_date)
-        
+
+        if 'cov_matrix' in st.session_state:
+            del st.session_state['cov_matrix']
+
         st.session_state['data'] = (prices, daily, monthly, monthly_g)
         st.session_state['fetched_tickers'] = current_tickers 
         st.sidebar.success("Data Updated!")
 
+    
+
     if 'data' in st.session_state:
         prices, dailygain, monthly, monthlygain = st.session_state['data']
         valid_tickers = st.session_state.get('fetched_tickers', st.session_state['tickers'])
-        
-        tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Correlations", "Fama-French", "Deep Dive"])
+        try:
+            start_dates = prices.apply(pd.Series.first_valid_index)
+            amountofyears = (pd.to_datetime(end_date) - start_dates).dt.days / 365.25
+        except Exception as e:
+            st.write("Amount of years is WRONG")
+            amountofyears = 10000000
+        tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Correlations", "Factor Models", "Deep Dive"])
+        if 'cov_matrix' not in st.session_state:
+            st.session_state['cov_matrix'] = dailygain[st.session_state['tickers']].dropna().cov()
 
         with tab1:
             st.write("### Basic Statistics")
-            printingstatistics(dailygain)
-           
+
+            stats = printingstatistics(dailygain, prices)
+            st.dataframe(stats)
+            st.divider()
+            st.write("### Choose your weights")
+            totalworth, moneyz = weightselection(st.session_state['tickers'])
+
+            if totalworth != 0 and moneyz:
+                weights = np.array(moneyz)/totalworth
+            else:
+                weights = np.full(len(st.session_state['tickers']),1/len(st.session_state['tickers']))
+            
+            use_ewma = st.checkbox("Use EWMA (Reacts faster to recent volatility)")
+
+            if use_ewma:
+                st.session_state['cov_matrix'] = EWMA(dailygain)
+
+            annualizedportfolioVolatility = portfoliovolatility(weights, st.session_state['cov_matrix'])
+
+            minvarportweights = weightsminimumvariance(st.session_state['cov_matrix'])
+
+            st.subheader("Minimum variance portfolio weights")
+            st.dataframe(pd.DataFrame({"Weights": minvarportweights}, index = st.session_state['cov_matrix'].index))
+
+            annualyields = stats['Total Yield (%)']/amountofyears
+            annualyields = annualyields.reindex(st.session_state['cov_matrix'].columns).fillna(0)
+            try:
+                
+                annualizedreturns = weights @ (annualyields)
+                
+                portfolioreturns = [annualizedreturns]
+                portfoliovolatilities = [annualizedportfolioVolatility]
+                portfolioreturns.append(minvarportweights @ annualyields)
+                portfoliovolatilities.append(portfoliovolatility(minvarportweights, st.session_state['cov_matrix']))
+                indices = ['Current portfolio', 'Mininum variance portfolio']
+                st.write(pd.DataFrame({"Volatility (%)": portfoliovolatilities, "Annualized returns (%)": portfolioreturns}, index = indices))
+            except Exception as e:
+                st.write("Please fetch data")
+            
+            if st.button("Get Return on Risk plot"):
+                returnriskplot = plottingminvarportfolios(st.session_state['cov_matrix'], annualyields)
+                st.pyplot(returnriskplot)
+            
+
 
         with tab2:
             st.write("### Correlations")
+
             col1, col2 = st.columns([1, 1]) 
             
             with col1:
                 st.subheader("Correlation Matrix (daily returns)")
-                plotcorrelations(dailygain)
+                fig1 = plotcorrelations(dailygain.dropna())
+                st.pyplot(fig1)
             with col2: 
                 st.subheader("Correlation Matrix (monthly returns)")
-                plotcorrelations(monthlygain)
+                fig2 =plotcorrelations(monthlygain.dropna())
+                st.pyplot(fig2)
+            
+            st.divider()
+
+            col3,col4 = st.columns([1,1])
+            with col3:
+                st.subheader("Covariance matrix (annualized)")
+                fig3 = plotcovariances(st.session_state['cov_matrix'] * 252)
+                st.pyplot(fig3)
+            
+
+            
 
         with tab3:
             st.write("### Fama French 3-Factor Model")
@@ -359,6 +563,28 @@ def main():
                 st.dataframe(res.style.background_gradient(cmap="RdBu", axis=0))
             except Exception as e:
                 st.error(f"FF3 Error (Check dates): {e}")
+            
+            st.divider()
+            st.write("### Statistical Factor model")
+            st.write("Scree plot ")    
+
+            col1, col2 = st.columns([1,1])
+            with col1:
+                st.subheader("Scree plot")
+                plot = plottingvarexplained(monthlygain)
+                st.pyplot(plot)
+            with col2:
+                
+                k = st.number_input("How many Principal Components?", min_value=1, value=3, step=1)
+                if k > monthlygain.shape[1]:
+                    k = monthlygain.shape[1]
+
+                if st.button("Principal Component Analysis"):
+                    st.write("This is not done :c")
+
+
+
+                
 
         with tab4:
             st.write("### Extended Analysis")
@@ -375,5 +601,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
